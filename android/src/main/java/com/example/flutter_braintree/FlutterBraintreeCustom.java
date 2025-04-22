@@ -1,5 +1,4 @@
 package com.example.flutter_braintree;
-
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -15,48 +14,42 @@ import com.braintreepayments.api.PayPalAccountNonce;
 import com.braintreepayments.api.PayPalCheckoutRequest;
 import com.braintreepayments.api.PayPalClient;
 import com.braintreepayments.api.PayPalListener;
+import com.braintreepayments.api.PayPalRequest;
 import com.braintreepayments.api.PayPalVaultRequest;
 import com.braintreepayments.api.PaymentMethodNonce;
 import com.braintreepayments.api.UserCanceledException;
+
 
 import java.util.HashMap;
 
 public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalListener {
     private BraintreeClient braintreeClient;
     private PayPalClient payPalClient;
+    private Boolean started = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_flutter_braintree_custom);
-
         try {
             Intent intent = getIntent();
-            String authorization = intent.getStringExtra("authorization");
-            if (authorization == null) {
-                throw new Exception("Authorization token is required.");
-            }
-
-            braintreeClient = new BraintreeClient(this, authorization);
+            braintreeClient = new BraintreeClient(this, intent.getStringExtra("authorization"));
             String type = intent.getStringExtra("type");
-            if (type == null) {
-                throw new Exception("Request type is required.");
-            }
-
-            switch (type) {
-                case "tokenizeCreditCard":
-                    tokenizeCreditCard();
-                    break;
-                case "requestPaypalNonce":
-                    payPalClient = new PayPalClient(this, braintreeClient);
-                    payPalClient.setListener(this);
-                    requestPaypalNonce();
-                    break;
-                default:
-                    throw new Exception("Invalid request type: " + type);
+            if (type.equals("tokenizeCreditCard")) {
+                tokenizeCreditCard();
+            } else if (type.equals("requestPaypalNonce")) {
+                payPalClient = new PayPalClient(this, braintreeClient);
+                payPalClient.setListener(this);
+                requestPaypalNonce();
+            } else {
+                throw new Exception("Invalid request type: " + type);
             }
         } catch (Exception e) {
-            handleError(e);
+            Intent result = new Intent();
+            result.putExtra("error", e);
+            setResult(2, result);
+            finish();
+            return;
         }
     }
 
@@ -66,7 +59,18 @@ public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalL
         setIntent(newIntent);
     }
 
-    private void tokenizeCreditCard() {
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+    }
+
+    protected void tokenizeCreditCard() {
         Intent intent = getIntent();
         Card card = new Card();
         card.setExpirationMonth(intent.getStringExtra("expirationMonth"));
@@ -75,20 +79,20 @@ public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalL
         card.setCardholderName(intent.getStringExtra("cardholderName"));
         card.setNumber(intent.getStringExtra("cardNumber"));
 
+
         CardClient cardClient = new CardClient(braintreeClient);
-        cardClient.tokenize(card, new CardTokenizeCallback() {
-            @Override
-            public void onResult(CardNonce cardNonce, Exception error) {
-                if (cardNonce != null) {
-                    onPaymentMethodNonceCreated(cardNonce);
-                } else if (error != null) {
-                    onError(error);
-                }
+        CardTokenizeCallback callback = (cardNonce, error) -> {
+            if(cardNonce != null){
+                onPaymentMethodNonceCreated(cardNonce);
             }
-        });
+            if(error != null){
+                onError(error);
+            }
+        };
+        cardClient.tokenize(card, callback);
     }
 
-    private void requestPaypalNonce() {
+    protected void requestPaypalNonce() {
         Intent intent = getIntent();
         if (intent.getStringExtra("amount") == null) {
             // Vault flow
@@ -104,22 +108,20 @@ public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalL
         }
     }
 
-    private void onPaymentMethodNonceCreated(PaymentMethodNonce paymentMethodNonce) {
-        HashMap<String, Object> nonceMap = new HashMap<>();
+    public void onPaymentMethodNonceCreated(PaymentMethodNonce paymentMethodNonce) {
+        HashMap<String, Object> nonceMap = new HashMap<String, Object>();
         nonceMap.put("nonce", paymentMethodNonce.getString());
         nonceMap.put("isDefault", paymentMethodNonce.isDefault());
-
         if (paymentMethodNonce instanceof PayPalAccountNonce) {
             PayPalAccountNonce paypalAccountNonce = (PayPalAccountNonce) paymentMethodNonce;
             nonceMap.put("paypalPayerId", paypalAccountNonce.getPayerId());
             nonceMap.put("typeLabel", "PayPal");
             nonceMap.put("description", paypalAccountNonce.getEmail());
-        } else if (paymentMethodNonce instanceof CardNonce) {
+        }else if(paymentMethodNonce instanceof CardNonce){
             CardNonce cardNonce = (CardNonce) paymentMethodNonce;
             nonceMap.put("typeLabel", cardNonce.getCardType());
             nonceMap.put("description", "ending in ••" + cardNonce.getLastTwo());
         }
-
         Intent result = new Intent();
         result.putExtra("type", "paymentMethodNonce");
         result.putExtra("paymentMethodNonce", nonceMap);
@@ -127,22 +129,15 @@ public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalL
         finish();
     }
 
-    private void onCancel() {
+    public void onCancel() {
         setResult(RESULT_CANCELED);
         finish();
     }
 
-    private void onError(Exception error) {
+    public void onError(Exception error) {
         Intent result = new Intent();
         result.putExtra("error", error);
-        setResult(RESULT_CANCELED, result);
-        finish();
-    }
-
-    private void handleError(Exception e) {
-        Intent result = new Intent();
-        result.putExtra("error", e);
-        setResult(RESULT_CANCELED, result);
+        setResult(2, result);
         finish();
     }
 
@@ -154,11 +149,12 @@ public class FlutterBraintreeCustom extends AppCompatActivity implements PayPalL
     @Override
     public void onPayPalFailure(@NonNull Exception error) {
         if (error instanceof UserCanceledException) {
-            if (((UserCanceledException) error).isExplicitCancelation()) {
+            if(((UserCanceledException) error).isExplicitCancelation()){
                 onCancel();
             }
         } else {
             onError(error);
         }
+
     }
 }
